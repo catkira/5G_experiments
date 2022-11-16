@@ -211,6 +211,12 @@ fclose(fileHandle);
 
 
 %% verify waveform
+L_max = 4; % 4, 8 or 64
+nrbSSB = 20;
+scsSSB = 15;
+nSlot = 0;
+rxSampleRate = 30720000;
+
 peak_value = zeros(3,1);
 peak_index = zeros(3,1);
 pssIndices = (636-63):1:(636+63);
@@ -230,4 +236,154 @@ for current_NID2 = [0 1 2]
     plot(corr);
 end
 [x, detected_NID2] = max(peak_value);
-assert(detected_NID2 - 1 == NID2)
+detected_NID2 = detected_NID2-1;
+assert(detected_NID2 == NID2)
+
+%%
+refGrid = zeros([nrbSSB*12 2]);
+refGrid(nrPSSIndices,2) = nrPSS(NID2);
+% Timing estimation. This is the timing offset to the OFDM symbol prior to
+% the detected SSB due to the content of the reference grid
+timingOffset = nrTimingEstimate(waveform,nrbSSB,scsSSB,nSlot,refGrid,'SampleRate',rxSampleRate);
+% Synchronization, OFDM demodulation, and extraction of strongest SS block
+rxGrid = nrOFDMDemodulate(waveform(1+timingOffset:end,:),nrbSSB,scsSSB,nSlot,'SampleRate',rxSampleRate);
+rxGrid = rxGrid(:,2:5,:);
+
+% Extract the received SSS symbols from the SS/PBCH block
+sssIndices = nrSSSIndices;
+sssRx = nrExtractResources(sssIndices,rxGrid);
+
+% Correlate received SSS symbols with each possible SSS sequence
+sssEst = zeros(1,336);
+for NID1 = 0:335
+    ncellid = (3*NID1) + NID2;
+    sssRef = nrSSS(ncellid);
+    sssEst(NID1+1) = sum(abs(mean(sssRx .* conj(sssRef),1)).^2);
+end
+% Plot SSS correlations
+figure;
+stem(0:335,sssEst,'o');
+title('SSS Correlations (Frequency Domain)');
+xlabel('$N_{ID}^{(1)}$','Interpreter','latex');
+ylabel('Magnitude');
+axis([-1 336 0 max(sssEst)*1.1]);
+
+% Determine NID1 by finding the strongest correlation
+detected_NID1 = find(sssEst==max(sssEst)) - 1;
+
+%%
+detected_ncellid = (3*detected_NID1) + detected_NID2;
+% Calculate PBCH DM-RS indices
+dmrsIndices = nrPBCHDMRSIndices(detected_ncellid);
+
+% Perform channel estimation using DM-RS symbols for each possible DM-RS
+% sequence and estimate the SNR
+dmrsEst = zeros(1,8);
+for ibar_SSB = 0:7
+
+    refGrid = zeros([240 4]);
+    refGrid(dmrsIndices) = nrPBCHDMRS(detected_ncellid,ibar_SSB);
+    [hest,nest] = nrChannelEstimate(rxGrid,refGrid,'AveragingWindow',[0 1]);
+    dmrsEst(ibar_SSB+1) = 10*log10(mean(abs(hest(:).^2)) / nest);
+
+end
+
+% Plot PBCH DM-RS SNRs
+figure;
+stem(0:7,dmrsEst,'o');
+title('PBCH DM-RS SNR Estimates');
+xlabel('$\overline{i}_{SSB}$','Interpreter','latex');
+xticks(0:7);
+ylabel('Estimated SNR (dB)');
+axis([-1 8 min(dmrsEst)-1 max(dmrsEst)+1]);
+
+% Record ibar_SSB for the highest SNR
+ibar_SSB = find(dmrsEst==max(dmrsEst)) - 1;
+
+%%
+refGrid = zeros([nrbSSB*12 4]);
+refGrid(dmrsIndices) = nrPBCHDMRS(detected_ncellid,ibar_SSB);
+refGrid(sssIndices) = nrSSS(detected_ncellid);
+[hest,nest,hestInfo] = nrChannelEstimate(rxGrid,refGrid,'AveragingWindow',[0 1]);
+%%
+disp(' -- PBCH demodulation and BCH decoding -- ')
+
+% Extract the received PBCH symbols from the SS/PBCH block
+[pbchIndices,pbchIndicesInfo] = nrPBCHIndices(detected_ncellid);
+pbchRx = nrExtractResources(pbchIndices,rxGrid);
+
+% Configure 'v' for PBCH scrambling according to TS 38.211 Section 7.3.3.1
+% 'v' is also the 2 LSBs of the SS/PBCH block index for L_max=4, or the 3
+% LSBs for L_max=8 or 64.
+if L_max == 4
+    v = mod(ibar_SSB,4);
+else
+    v = ibar_SSB;
+end
+ssbIndex = v;
+
+% PBCH equalization and CSI calculation
+pbchHest = nrExtractResources(pbchIndices,hest);
+[pbchEq,csi] = nrEqualizeMMSE(pbchRx,pbchHest,nest);
+Qm = pbchIndicesInfo.G / pbchIndicesInfo.Gd;
+csi = repmat(csi.',Qm,1);
+csi = reshape(csi,[],1);
+
+% Plot received PBCH constellation after equalization
+figure;
+plot(pbchEq,'o');
+xlabel('In-Phase'); ylabel('Quadrature')
+title('Equalized PBCH Constellation');
+m = max(abs([real(pbchEq(:)); imag(pbchEq(:))])) * 1.1;
+axis([-m m -m m]);
+
+% PBCH demodulation
+pbchBits = nrPBCHDecode(pbchEq,detected_ncellid,v,nest);
+
+% generate scrambling sequence just for debugging
+E = 864; 
+scrambling_seq = nrPBCHPRBS(detected_ncellid,v,E);
+
+% Calculate RMS PBCH EVM
+pbchRef = nrPBCH(pbchBits<0,detected_ncellid,v);
+evm = comm.EVM;
+pbchEVMrms = evm(pbchRef,pbchEq);
+
+% Display calculated EVM
+disp([' PBCH RMS EVM: ' num2str(pbchEVMrms,'%0.3f') '%']);
+
+%%
+% Apply CSI
+pbchBits = pbchBits .* csi;
+
+% Perform BCH decoding including rate recovery, polar decoding, and CRC
+% decoding. PBCH descrambling and separation of the BCH transport block
+% bits 'trblk' from 8 additional payload bits A...A+7 is also performed:
+%   A ... A+3: 4 LSBs of system frame number
+%         A+4: half frame number
+% A+5 ... A+7: for L_max=64, 3 MSBs of the SS/PBCH block index
+%              for L_max=4 or 8, A+5 is the MSB of subcarrier offset k_SSB
+polarListLength = 8;
+[~,crcBCH,trblk,sfn4lsb,nHalfFrame,msbidxoffset] = ...
+    nrBCHDecode(pbchBits,polarListLength,L_max,detected_ncellid);
+
+% Display the BCH CRC
+disp([' BCH CRC: ' num2str(crcBCH)]);
+
+% Stop processing MIB and SIB1 if BCH was received with errors
+if crcBCH
+    disp(' BCH CRC is not zero.');
+    return
+end
+
+% Use 'msbidxoffset' value to set bits of 'k_SSB' or 'ssbIndex', depending
+% on the number of SS/PBCH blocks in the burst
+if (L_max==64)
+    ssbIndex = ssbIndex + (bit2int(msbidxoffset,3) * 8);
+    k_SSB = 0;
+else
+    k_SSB = msbidxoffset * 16;
+end
+
+% Displaying the SSB index
+disp([' SSB index: ' num2str(ssbIndex)]);
