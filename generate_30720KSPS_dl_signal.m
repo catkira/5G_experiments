@@ -210,12 +210,14 @@ fwrite(fileHandle, reshape([real(waveform) imag(waveform)]',1,[]), 'int32');
 fclose(fileHandle);
 
 
-%% verify waveform
-L_max = 4; % 4, 8 or 64
+%%
+%%
+%% verify waveform with code from matlab examples
+L_max = 8; % 4, 8 or 64
 nrbSSB = 20;
 scsSSB = 15;
 nSlot = 0;
-rxSampleRate = 30720000;
+rxSampleRate = Fs;
 
 peak_value = zeros(3,1);
 peak_index = zeros(3,1);
@@ -244,7 +246,16 @@ refGrid = zeros([nrbSSB*12 2]);
 refGrid(nrPSSIndices,2) = nrPSS(NID2);
 % Timing estimation. This is the timing offset to the OFDM symbol prior to
 % the detected SSB due to the content of the reference grid
-timingOffset = nrTimingEstimate(waveform,nrbSSB,scsSSB,nSlot,refGrid,'SampleRate',rxSampleRate);
+if false
+    %timingOffset = nrTimingEstimate(waveform,nrbSSB,scsSSB,nSlot,refGrid,'SampleRate',rxSampleRate);
+else
+    % use same SSB as in python code
+    mu = 0;
+    cp1 = round(5.2e-6*Fs * 2^(-mu));
+    cp2 = round(4.7e-6*Fs * 2^(-mu));
+    timingOffset = 35264 - 2048 - cp1 - cp2;
+end
+
 % Synchronization, OFDM demodulation, and extraction of strongest SS block
 rxGrid = nrOFDMDemodulate(waveform(1+timingOffset:end,:),nrbSSB,scsSSB,nSlot,'SampleRate',rxSampleRate);
 rxGrid = rxGrid(:,2:5,:);
@@ -338,7 +349,7 @@ m = max(abs([real(pbchEq(:)); imag(pbchEq(:))])) * 1.1;
 axis([-m m -m m]);
 
 % PBCH demodulation
-pbchBits = nrPBCHDecode(pbchEq,detected_ncellid,v,nest);
+pbchEq = nrPBCHDecode(pbchEq,detected_ncellid,v,nest);
 
 % generate scrambling sequence just for debugging
 E = 864; 
