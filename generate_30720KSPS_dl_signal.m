@@ -247,7 +247,7 @@ refGrid(nrPSSIndices,2) = nrPSS(NID2);
 % Timing estimation. This is the timing offset to the OFDM symbol prior to
 % the detected SSB due to the content of the reference grid
 if false
-    %timingOffset = nrTimingEstimate(waveform,nrbSSB,scsSSB,nSlot,refGrid,'SampleRate',rxSampleRate);
+    timingOffset = nrTimingEstimate(waveform,nrbSSB,scsSSB,nSlot,refGrid,'SampleRate',rxSampleRate);
 else
     % use same SSB as in python code
     mu = 0;
@@ -348,10 +348,10 @@ title('Equalized PBCH Constellation');
 m = max(abs([real(pbchEq(:)); imag(pbchEq(:))])) * 1.1;
 axis([-m m -m m]);
 
-% PBCH demodulation
-pbchEq = nrPBCHDecode(pbchEq,detected_ncellid,v,nest);
+% PBCH demodulation, does also descrambling
+pbchBits = nrPBCHDecode(pbchEq,detected_ncellid,v,nest);
 
-% generate scrambling sequence just for debugging
+% generate scrambling sequence just for debugging, TS38.11 7.3.3.1
 E = 864; 
 scrambling_seq = nrPBCHPRBS(detected_ncellid,v,E);
 
@@ -375,9 +375,59 @@ pbchBits = pbchBits .* csi;
 % A+5 ... A+7: for L_max=64, 3 MSBs of the SS/PBCH block index
 %              for L_max=4 or 8, A+5 is the MSB of subcarrier offset k_SSB
 polarListLength = 8;
-[~,crcBCH,trblk,sfn4lsb,nHalfFrame,msbidxoffset] = ...
+[scrblk,crcBCH,trblk,sfn4lsb,nHalfFrame,msbidxoffset] = ...
     nrBCHDecode(pbchBits,polarListLength,L_max,detected_ncellid);
+%% 
+% manual polar decoding and descrambling
+if true
+    iBIL = false;
+    iIL = true;
+    crcLen = 24;
+    nMax = 9;
+    A = 32;
+    P = 24;
+    K = A+P;
+    N = get_3GPP_N(K,E,9);
+    decIn = nrRateRecoverPolar(pbchBits,K,N,iBIL);
+    decBits = nrPolarDecode(decIn,K,E,polarListLength,nMax,iIL,crcLen);
+    %crc = decBits(end-23:end);
+    [blk,err1] = nrCRCDecode(decBits,'24C');
+    if err1
+        disp(' BCH CRC is not zero.');
+        return
+    end
+    if srcblk ~= blk(1:32)
+        disp(' scrambled payload is not correct.');
+        return
+    end
 
+    % descramble according to TS38.212 7.1.2
+    if L_max == 4 || L_max == 8
+        M = A-3;
+    else
+        M = A-6;
+    end
+    tmp_seq = nrPBCHPRBS(detected_ncellid,0,length(blk)*100);
+    interleave_pattern = [16 23 18 17 8 30 10 6 24 7 0 5 3 2 1 4 9 11 12 13 14 15 19 20 21 22 25 26 27 28 29 31] + 1;
+    for n = 0:500 % try to brute force
+        scrambling_seq2 = tmp_seq(n+1:n+A);
+        zero_positions = [A-7+1 A-7+2 A-7+4];
+        %scrambling_seq2(interleave_pattern(zero_positions)) = 0;
+        %scrambling_seq2(zero_positions) = 0;
+        tmp_seq2 = bitxor(blk, scrambling_seq2);
+        if all(~tmp_seq2) || sum(tmp_seq2) < 10
+            disp(['index ' int2str(n) ' is ok !!!!!!!!!!!!!!!!'])
+            disp(sum(tmp_seq2))
+        end
+    end
+    tmp_seq3 = tmp_seq2(interleave_pattern);
+
+    ber = comm.ErrorRate;
+    errStats = ber(double(tmp_seq3(1:24)), double(trblk));
+    disp([' Bit Error Rate: ' num2str(errStats(1))]);
+end
+
+%%
 % Display the BCH CRC
 disp([' BCH CRC: ' num2str(crcBCH)]);
 
