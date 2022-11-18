@@ -1,3 +1,5 @@
+close all
+
 NID1 = 69;
 NID2 = 2;
 NID = 3*NID1 + NID2;
@@ -408,20 +410,29 @@ if true
         M = A-6;
     end
     tmp_seq = nrPBCHPRBS(detected_ncellid,0,length(blk)*100);
-    interleave_pattern = [16 23 18 17 8 30 10 6 24 7 0 5 3 2 1 4 9 11 12 13 14 15 19 20 21 22 25 26 27 28 29 31] + 1;
-    for n = 0:500 % try to brute force
-        scrambling_seq2 = tmp_seq(n+1:n+A);
-        zero_positions = [A-7+1 A-7+2 A-7+4];
-        %scrambling_seq2(interleave_pattern(zero_positions)) = 0;
-        %scrambling_seq2(zero_positions) = 0;
-        tmp_seq2 = bitxor(blk, scrambling_seq2);
-        if all(~tmp_seq2) || sum(tmp_seq2) < 10
-            disp(['index ' int2str(n) ' is ok !!!!!!!!!!!!!!!!'])
-            disp(sum(tmp_seq2))
+    G = [16 23 18 17 8 30 10 6 24 7 0 5 3 2 1 4 9 11 12 13 14 15 19 20 21 22 25 26 27 28 29 31] + 1;
+    PBCH_SFN_2ND_LSB_G = 10;
+    PBCH_SFN_3RD_LSB_G = 9;
+    v = 2*blk(PBCH_SFN_3RD_LSB_G) + blk(PBCH_SFN_2ND_LSB_G);
+    n = v*M;
+    scrambling_seq2 = tmp_seq(n+1:n+A);
+    scrambling_seq3 = zeros(A,1);
+    j = 1;
+    for i = 1:A
+        % SFN_2ND_LSB = 10, SFN_3RD_LSB = 9, half_frame_index= 11
+        if i == G(11) || i == G(PBCH_SFN_2ND_LSB_G) || i == G(PBCH_SFN_3RD_LSB_G)  
+            scrambling_seq3(i) = 0;
+        else
+            scrambling_seq3(i) = scrambling_seq2(j);
+            j = j+1;
         end
     end
-    tmp_seq3 = tmp_seq2(interleave_pattern);
+    tmp_seq2 = bitxor(blk, scrambling_seq3);
+    if all(~tmp_seq2) || sum(tmp_seq2) < 10
+        disp('manual descrambling works!')
+    end
 
+    tmp_seq3 = tmp_seq2(G);
     ber = comm.ErrorRate;
     errStats = ber(double(tmp_seq3(1:24)), double(trblk));
     disp([' Bit Error Rate: ' num2str(errStats(1))]);
