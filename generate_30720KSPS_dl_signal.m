@@ -1,4 +1,5 @@
 close all
+clear all
 
 NID1 = 69;
 NID2 = 2;
@@ -398,7 +399,7 @@ if true
         disp(' BCH CRC is not zero.');
         return
     end
-    if srcblk ~= blk(1:32)
+    if scrblk ~= blk(1:32)
         disp(' scrambled payload is not correct.');
         return
     end
