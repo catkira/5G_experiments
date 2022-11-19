@@ -230,7 +230,7 @@ for current_NID2 = [0 1 2]
     slotGrid = nrResourceGrid(carrierConfig, 1);
     slotGrid = slotGrid(:,1); % only 1 symbol
     slotGrid(pssIndices, 1) = nrPSS(current_NID2);
-    refWaveform = nrOFDMModulate(carrierConfig, slotGrid);
+    [refWaveform, info] = nrOFDMModulate(carrierConfig, slotGrid);
     refWaveform = refWaveform(161:end); % remove CP
 
     temp = xcorr(waveform, refWaveform);
