@@ -319,6 +319,8 @@ refGrid = zeros([nrbSSB*12 4]);
 refGrid(dmrsIndices) = nrPBCHDMRS(detected_ncellid,ibar_SSB);
 refGrid(sssIndices) = nrSSS(detected_ncellid);
 [hest,nest,hestInfo] = nrChannelEstimate(rxGrid,refGrid,'AveragingWindow',[0 1]);
+image(abs(hest),'CDataMapping','scaled')
+colorbar
 %%
 disp(' -- PBCH demodulation and BCH decoding -- ')
 
@@ -342,6 +344,9 @@ pbchHest = nrExtractResources(pbchIndices,hest);
 Qm = pbchIndicesInfo.G / pbchIndicesInfo.Gd;
 csi = repmat(csi.',Qm,1);
 csi = reshape(csi,[],1);
+image(abs(pbchEq),'CDataMapping','scaled')
+colorbar
+
 
 % Plot received PBCH constellation after equalization
 figure;
