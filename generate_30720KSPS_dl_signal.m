@@ -250,7 +250,8 @@ refGrid(nrPSSIndices,2) = nrPSS(NID2);
 % Timing estimation. This is the timing offset to the OFDM symbol prior to
 % the detected SSB due to the content of the reference grid
 if true
-    timingOffset = nrTimingEstimate(waveform,nrbSSB,scsSSB,nSlot,refGrid,'SampleRate',rxSampleRate);
+    % make sure to use first SSB
+    timingOffset = nrTimingEstimate(waveform(1:5000),nrbSSB,scsSSB,nSlot,refGrid,'SampleRate',rxSampleRate);
 else
     % use same SSB as in python code
     mu = 0;
